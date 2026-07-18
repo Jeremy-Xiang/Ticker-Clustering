@@ -16,6 +16,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
@@ -28,19 +29,25 @@ from src.features import build_feature_matrix
 
 app = FastAPI(title="Ticker Clustering API", version="1.0")
 
-# Permissive CORS for local development against a separate frontend dev
-# server. Tighten this (or remove it and rely on THESIS's existing CORS
-# config) before deploying for real.
+# Each ticker in a request triggers one outbound yfinance download, so an
+# uncapped list is a request-amplification / DoS vector on this public,
+# unauthenticated endpoint. Cap the batch; raise via env only if you must.
+MAX_TICKERS = int(os.environ.get("MAX_TICKERS", "50"))
+
+# Comma-separated CORS allowlist, e.g. "https://thesis.jeremyxiang.com".
+# Falls back to "*" for local dev; set it in production to lock the API down.
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 class ClusterRequest(BaseModel):
-    tickers: list[str] = Field(..., min_length=2, description="Ticker symbols to cluster")
+    tickers: list[str] = Field(..., min_length=2, max_length=MAX_TICKERS, description="Ticker symbols to cluster")
     n_clusters: int = Field(4, ge=2, le=20)
     method: Literal["kmeans", "hierarchical"] = "kmeans"
     period: str = Field("2y", description="yfinance lookback period, e.g. '1y', '2y', '5y'")
@@ -59,7 +66,7 @@ class ClusterResponse(BaseModel):
 
 
 class SilhouetteRequest(BaseModel):
-    tickers: list[str] = Field(..., min_length=3)
+    tickers: list[str] = Field(..., min_length=3, max_length=MAX_TICKERS)
     period: str = "2y"
     max_k: int = Field(8, ge=3, le=15)
 
